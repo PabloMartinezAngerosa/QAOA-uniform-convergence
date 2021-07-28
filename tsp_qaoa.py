@@ -1,6 +1,6 @@
 import qiskit
 from thirdParty.classical import rand_graph, classical, bitstring_to_path, calc_cost
-
+import numpy as np
 
 if __name__ == '__main__':
     
