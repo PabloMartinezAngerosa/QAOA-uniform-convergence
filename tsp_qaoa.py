@@ -1,8 +1,6 @@
 import qiskit
 from thirdParty.classical import rand_graph, classical, bitstring_to_path, calc_cost
-import networkx as nx
-
-from utils import mapeo_grafo
+import numpy as np
 
 if __name__ == '__main__':
     
