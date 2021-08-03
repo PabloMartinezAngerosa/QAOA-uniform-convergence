@@ -9,5 +9,4 @@ def mapeo_grafo(matriz_conexiones,matriz_pesos):
             if elemento_conexion == 1:
                 elemento_peso = matriz_pesos[i][j]
                 G.add_edge(i,j,weight=elemento_peso)
-                print(elemento_peso)
     return G
