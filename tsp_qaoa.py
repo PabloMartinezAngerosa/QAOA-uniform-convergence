@@ -18,8 +18,8 @@ from qiskit.aqua.operators import WeightedPauliOperator
 
 
 # returns the bit index for an alpha and j
-def bit(alpha, j, num_cities):
-    return j * num_cities + alpha
+def bit(i_city, l_time, num_cities):
+    return i_city * num_cities + l_time 
 
 # e^(cZZ) #TODO: terminar de adaptar
 def append_zz_term(qc,q1,q2,gamma):
@@ -32,13 +32,28 @@ def append_z_term():
     pass
 
 
+def get_not_edge_in(G):
+    N = G.number_of_nodes()
+    not_edge = []
+    for i in range(N):
+        for j in range(N):
+            if i != j:
+                buffer_tupla = (i,j)
+                in_edges = False
+                for edge_i, edge_j in G.edges():             
+                    if ( buffer_tupla == (edge_i, edge_j) or buffer_tupla == (edge_j, edge_i)):
+                        in_edges = True
+                if in_edges == False:
+                    not_edge.append((i, j))
+    return not_edge
+
 def get_classical_simplified_hamiltonian(G, _lambda):
 
     # recorrer la formula Z con datos grafo se va guardando en diccionario que acumula si coinciden los terminos
     N = G.number_of_nodes()
     E = G.edges()
 
-    # Z 
+    # Only one z #
 
     z_classic_term = [0] * N**2
 
@@ -72,14 +87,55 @@ def get_classical_simplified_hamiltonian(G, _lambda):
                     z_ij_index =  bit(i, j, N)
                     z_classic_term[z_ij_index] +=  _lambda / 2
 
-    # third term
-    not_edge = []
-    for i in range(N):
-        for j in range(N):
-            dummy_tupla = (i,j)
-            for edge_i, edge_j in G.edges():
-                if ( dummy_tupla != (edge_i, edge_j) and dummy_tupla != (edge_j, edge_i)):
-                    not_edge.append(dummy_tupla)
+    # fourth term
+    not_edge = get_not_edge_in(G)
+    for edge in not_edge:
+        for l in range(N):
+            i = edge[0]
+            j = edge[1]
+            # z_il
+            z_il_index =  bit(i, l, N)
+            z_classic_term[z_il_index] +=  _lambda / 4
+            # z_j(l+1)
+            l_plus = (l+1) % N
+            z_jlplus_index =  bit(j, l_plus, N)
+            z_classic_term[z_jlplus_index] +=  _lambda / 4
+    
+    # fifthy term
+    weights = nx.get_edge_attributes(G,'weight')
+    for edge_i, edge_j in G.edges(): 
+        weight_ij = weights.get((edge_i,edge_j))
+        weight_ji = weight_ij
+        for l in range(N):
+
+            # z_il
+            z_il_index =  bit(edge_i, l, N)
+            z_classic_term[z_il_index] +=  weight_ij / 4
+
+            # z_jlplus
+            l_plus = (l+1) % N
+            z_jlplus_index =  bit(edge_j, l_plus, N)
+            z_classic_term[z_jlplus_index] +=  weight_ij / 4
+
+            # order term #
+            # z_i'l
+            z_il_index =  bit(edge_j, l, N)
+            z_classic_term[z_il_index] +=  weight_ji / 4
+
+            # z_j'lplus
+            l_plus = (l+1) % N
+            z_jlplus_index =  bit(edge_i, l_plus, N)
+            z_classic_term[z_jlplus_index] +=  weight_ji / 4
+
+    return z_classic_term
+    
+
+
+
+
+
+    
+
 
 
     
@@ -122,3 +178,7 @@ if __name__ == '__main__':
     print(mejor_camino)
     print(G.edges())
     print(G.nodes())
+    print("labels")
+    labels = nx.get_edge_attributes(G,'weight')
+
+    print(get_classical_simplified_hamiltonian(G, 1))
