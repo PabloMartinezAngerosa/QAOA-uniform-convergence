@@ -21,16 +21,21 @@ from qiskit.aqua.operators import WeightedPauliOperator
 def bit(i_city, l_time, num_cities):
     return i_city * num_cities + l_time 
 
-# e^(cZZ) #TODO: terminar de adaptar
-def append_zz_term(qc,q1,q2,gamma):
-    qc.cx(q1,q2)
-    qc.rz(2*gamma,q2)
-    qc.cx(q1,q2)
 
-# e^(cZ) #TODO: terminar de adaptar
-def append_z_term():
-    pass
+# e^(cZZ) 
+def append_zz_term(qc, q_i, q_j, gamma, constant_term):
+    qc.cx(q_i, q_j)
+    qc.rz(2*gamma*constant_term,q_j)
+    qc.cx(q_i, q_j)
 
+
+# e^(cZ)
+def append_z_term(qc, q_i, gamma, constant_term):
+    qc.rz(2*gamma*constant_term, q_i)
+
+# e^(cX)
+def append_x_term(qc,qi,beta):
+    qc.rx(2*beta, qi)
 
 def get_not_edge_in(G):
     N = G.number_of_nodes()
@@ -47,13 +52,14 @@ def get_not_edge_in(G):
                     not_edge.append((i, j))
     return not_edge
 
-def get_classical_simplified_hamiltonian(G, _lambda):
 
+def get_classical_simplified_z_term(G, _lambda):
+    
     # recorrer la formula Z con datos grafo se va guardando en diccionario que acumula si coinciden los terminos
     N = G.number_of_nodes()
     E = G.edges()
 
-    # Only one z #
+    #  z term #
 
     z_classic_term = [0] * N**2
 
@@ -88,7 +94,7 @@ def get_classical_simplified_hamiltonian(G, _lambda):
                     z_classic_term[z_ij_index] +=  _lambda / 2
 
     # fourth term
-    not_edge = get_not_edge_in(G)
+    not_edge = get_not_edge_in(G) # include order tuples ej = (1,0), (0,1)
     for edge in not_edge:
         for l in range(N):
             i = edge[0]
@@ -117,7 +123,7 @@ def get_classical_simplified_hamiltonian(G, _lambda):
             z_jlplus_index =  bit(edge_j, l_plus, N)
             z_classic_term[z_jlplus_index] +=  weight_ij / 4
 
-            # order term #
+            # add order term because G.edges() do not include order tuples #
             # z_i'l
             z_il_index =  bit(edge_j, l, N)
             z_classic_term[z_il_index] +=  weight_ji / 4
@@ -128,39 +134,141 @@ def get_classical_simplified_hamiltonian(G, _lambda):
             z_classic_term[z_jlplus_index] +=  weight_ji / 4
 
     return z_classic_term
+
+
+def get_classical_simplified_zz_term(G, _lambda):
+
+    # recorrer la formula Z con datos grafo se va guardando en diccionario que acumula si coinciden los terminos
+    N = G.number_of_nodes()
+    E = G.edges()
+
+    # zz term #
+    zz_classic_term = [[0] * N**2 for i in range(N**2) ]
+     
+    # first term
+    for l in range(N):
+        for j in range(N):
+            for i in range(N):
+                if i < j:
+                    # z_il
+                    z_il_index =  bit(i, l, N)
+                    # z_jl
+                    z_jl_index =  bit(j, l, N)
+                    zz_classic_term[z_il_index][z_jl_index] +=  _lambda / 2 
+
+    # second term
+    for i in range(N):
+        for l in range(N):
+            for j in range(N):
+                if l < j:
+                    # z_il
+                    z_il_index =  bit(i, l, N)
+                    # z_ij
+                    z_ij_index =  bit(i, j, N)
+                    zz_classic_term[z_il_index][z_ij_index] +=  _lambda / 2 
     
+    # third term
+    not_edge = get_not_edge_in(G)
+    for edge in not_edge:
+        for l in range(N):
+            i = edge[0]
+            j = edge[1]
+            # z_il
+            z_il_index =  bit(i, l, N)
+            # z_j(l+1)
+            l_plus = (l+1) % N
+            z_jlplus_index =  bit(j, l_plus, N)
+            zz_classic_term[z_il_index][z_jlplus_index] +=  _lambda / 4
+    
+    # fourth term
+    weights = nx.get_edge_attributes(G,'weight')
+    for edge_i, edge_j in G.edges(): 
+        weight_ij = weights.get((edge_i,edge_j))
+        weight_ji = weight_ij
+        for l in range(N):
 
+            # z_il
+            z_il_index =  bit(edge_i, l, N)
 
+            # z_jlplus
+            l_plus = (l+1) % N
+            z_jlplus_index =  bit(edge_j, l_plus, N)
+            zz_classic_term[z_il_index][z_jlplus_index] +=  weight_ij / 4
 
+            # add order term because G.edges() do not include order tuples #
+            # z_i'l
+            z_il_index =  bit(edge_j, l, N)
 
+            # z_j'lplus
+            l_plus = (l+1) % N
+            z_jlplus_index =  bit(edge_i, l_plus, N)
+            zz_classic_term[z_il_index][z_jlplus_index] +=  weight_ji / 4
+    
+    return zz_classic_term
 
     
-
-
-
+def get_classical_simplified_hamiltonian(G, _lambda):    
     
+    # z term #
+    z_classic_term = get_classical_simplified_z_term(G, _lambda)
+    # zz term #
+    zz_classic_term = get_classical_simplified_zz_term(G, _lambda)
 
-    # recorre la formula ZZ con datos grafo se va guardando en diccionario que acumula si coinciden los terminos
-    # retorna Z, ZZ
-
+    return z_classic_term, zz_classic_term
 
 
 def get_cost_circuit(G, gamma, _lambda):
 
     N =  G.number_of_nodes()
-    qc = QuantumCircuit(N^2,N^2)
-    
-    #TODO optimizamos formula 
-    # llamamos una funcion que retorna dos 2 diccionarios con z term y zz term en clasico. 
+    N_square = N**2
+
+    qc = QuantumCircuit(N_square,N_square)
+      
     z_classic_term, zz_classic_term = get_classical_simplified_hamiltonian(G, _lambda)  
 
-    #TODO recorremos los diccianarios terminos y arma el circuito cuantico. 
     
-    for i,j in G.edges():
-        append_zz_term(qc,i,j,gamma)
+    
+    # z term
+    for i in range(N_square):
+        if z_classic_term[i] == 0:
+            append_z_term(qc, i, gamma, z_classic_term[i])
+    
+    # zz term
+    for i in range(N_square):
+        for j in range(N_square):
+            if zz_classic_term[i][j] != 0:
+                append_zz_term(qc, i, j, gamma, zz_classic_term[i][j])
+    
     return qc
 
+def get_mixer_operator(G,beta):
+    
+    N = G.number_of_nodes()
+    qc = QuantumCircuit(N**2,N**2)
+    
+    for n in range(N**2):
+        append_x_term(qc, n, beta)
 
+    return qc
+
+def get_QAOA_circuit(G, beta, gamma, _lambda):
+    
+    assert(len(beta)==len(gamma))
+    
+    N = G.number_of_nodes()
+    qc = QuantumCircuit(N**2,N**2)
+    # init min mix state
+    qc.h(range(N**2))
+    p=len(beta)
+    
+    for i in range(p):
+        qc = qc.compose(get_cost_circuit(G, gamma[i], _lambda))
+        qc = qc.compose(get_mixer_operator(G, beta[i]))
+
+    qc.barrier(range(N**2))
+    qc.measure(range(N**2),range(N**2))
+    
+    return qc
 
 if __name__ == '__main__':
     
@@ -181,4 +289,12 @@ if __name__ == '__main__':
     print("labels")
     labels = nx.get_edge_attributes(G,'weight')
 
-    print(get_classical_simplified_hamiltonian(G, 1))
+    z_term, zz_term = get_classical_simplified_hamiltonian(G, 1)
+    
+    #print("z term")
+    #print(z_term)
+    #print("*****************")
+    #print("zz term")
+    #print(zz_term)
+
+    print(get_QAOA_circuit(G, beta = [2,3], gamma = [4,5], _lambda = 1))
