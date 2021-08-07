@@ -17,6 +17,9 @@ from qiskit.aqua.operators import op_converter
 from qiskit.aqua.operators import WeightedPauliOperator
 
 
+# Gloabal _lambda variable
+_LAMBDA = 1
+
 # returns the bit index for an alpha and j
 def bit(i_city, l_time, num_cities):
     return i_city * num_cities + l_time 
@@ -217,6 +220,8 @@ def get_classical_simplified_hamiltonian(G, _lambda):
     return z_classic_term, zz_classic_term
 
 
+
+
 def get_cost_circuit(G, gamma, _lambda):
 
     N =  G.number_of_nodes()
@@ -224,13 +229,11 @@ def get_cost_circuit(G, gamma, _lambda):
 
     qc = QuantumCircuit(N_square,N_square)
       
-    z_classic_term, zz_classic_term = get_classical_simplified_hamiltonian(G, _lambda)  
-
-    
+    z_classic_term, zz_classic_term = get_classical_simplified_hamiltonian(G, _lambda)      
     
     # z term
     for i in range(N_square):
-        if z_classic_term[i] == 0:
+        if z_classic_term[i] != 0:
             append_z_term(qc, i, gamma, z_classic_term[i])
     
     # zz term
@@ -251,6 +254,9 @@ def get_mixer_operator(G,beta):
 
     return qc
 
+def invert_counts(counts):
+    return {k[::-1] :v for k,v in counts.items()}
+
 def get_QAOA_circuit(G, beta, gamma, _lambda):
     
     assert(len(beta)==len(gamma))
@@ -259,16 +265,45 @@ def get_QAOA_circuit(G, beta, gamma, _lambda):
     qc = QuantumCircuit(N**2,N**2)
     # init min mix state
     qc.h(range(N**2))
-    p=len(beta)
+    p = len(beta)
     
     for i in range(p):
         qc = qc.compose(get_cost_circuit(G, gamma[i], _lambda))
         qc = qc.compose(get_mixer_operator(G, beta[i]))
-
-    qc.barrier(range(N**2))
+        qc.barrier(range(N**2))
+    
     qc.measure(range(N**2),range(N**2))
     
     return qc
+
+def tsp_obj(x,G):
+    # obtenemos el valor evaluado en f(x_1, x_2,... x_n)
+    
+
+
+# Sample expectation value
+def compute_tsp_energy(counts, G):
+    energy = 0
+    get_counts = 0
+    total_counts = 0
+    for meas, meas_count in counts.items():
+        obj_for_meas = tsp_obj(meas,G)
+        energy += obj_for_meas*meas_count
+        total_counts += meas_count
+    return energy/total_counts
+
+def get_black_box_objective(G,p):
+    backend = Aer.get_backend('qasm_simulator')
+    def f(theta):
+        beta = theta[:p]
+        gamma = theta[p:]
+        _lambda = _LAMBDA # get global _lambda 
+        qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
+        counts = execute(qc, backend, seed_simulator=10).result().get_counts()
+        return compute_tsp_energy(invert_counts(counts),G)
+    return f
+
+
 
 if __name__ == '__main__':
     
