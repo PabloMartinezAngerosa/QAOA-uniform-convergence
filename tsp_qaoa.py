@@ -15,6 +15,7 @@ from qiskit.aqua.algorithms import NumPyEigensolver
 from qiskit.quantum_info import Pauli
 from qiskit.aqua.operators import op_converter
 from qiskit.aqua.operators import WeightedPauliOperator
+from qiskit.visualization import plot_histogram
 
 
 # Gloabal _lambda variable
@@ -276,9 +277,24 @@ def get_QAOA_circuit(G, beta, gamma, _lambda):
     
     return qc
 
-def tsp_obj(x,G):
+def tsp_obj(x, G):
     # obtenemos el valor evaluado en f(x_1, x_2,... x_n)
+    z_classic_term, zz_classic_term = get_classical_simplified_hamiltonian(G, _LAMBDA)
+    cost = 0
+
+    # z term 
+    for index in range(len(x)):
+        z = (int(x[index]) * 2 ) -1
+        cost += z_classic_term[index] * z
+
+    ## zz term
+    for i in range(len(x)):
+        z_1 = (int(x[i]) * 2 ) -1
+        for j in range(len(x)):
+            z_2 = (int(x[j]) * 2 ) -1
+            cost += zz_classic_term[i][j] * z_1 * z_1
     
+    return cost
 
 
 # Sample expectation value
@@ -287,10 +303,84 @@ def compute_tsp_energy(counts, G):
     get_counts = 0
     total_counts = 0
     for meas, meas_count in counts.items():
-        obj_for_meas = tsp_obj(meas,G)
+        obj_for_meas = tsp_obj(meas, G)
         energy += obj_for_meas*meas_count
         total_counts += meas_count
     return energy/total_counts
+
+# Sample expectation value
+def compute_tsp_energy_2(counts, G):
+    energy = 0
+    get_counts = 0
+    total_counts = 0
+    for meas, meas_count in counts.items():
+        obj_for_meas = tsp_obj_2(meas, G, _LAMBDA)
+        energy += obj_for_meas*meas_count
+        total_counts += meas_count
+    return energy/total_counts
+
+def tsp_obj_2(x, G,_lambda):
+    # obtenemos el valor evaluado en f(x_1, x_2,... x_n)
+    not_edge = get_not_edge_in(G)
+    N = G.number_of_nodes()
+    
+    tsp_cost=0
+    #Distancia
+    weights = nx.get_edge_attributes(G,'weight')
+    for edge_i, edge_j in G.edges(): 
+        weight_ij = weights.get((edge_i,edge_j))
+        weight_ji = weight_ij
+        for l in range(N):
+
+            # x_il
+            x_il_index = bit(edge_i, l, N)
+
+            # x_jlplus
+            l_plus = (l+1) % N
+            x_jlplus_index = bit(edge_j, l_plus, N)
+            tsp_cost+= int(x[x_il_index]) * int(x[x_jlplus_index]) * weight_ij
+
+            # add order term because G.edges() do not include order tuples #
+            # x_i'l
+            x_il_index =  bit(edge_j, l, N)
+
+            # x_j'lplus
+            x_jlplus_index =  bit(edge_i, l_plus, N)
+            tsp_cost += int(x[x_il_index]) * int(x[x_jlplus_index]) * weight_ji
+
+    #Constraint 1
+    for l in range(N):
+        penal1 = 1
+        for i in range(N):
+            x_il_index = bit(i, l, N)
+            penal1 -= int(x[x_il_index])
+    
+        tsp_cost += _lambda * penal1**2
+        
+    #Contstraint 2
+    for i in range(N):
+        penal2 = 1
+        for l in range(N):
+            x_il_index = bit(i, l, N)
+
+            penal2 -= int(x[x_il_index])
+    
+        tsp_cost += _lambda*penal2**2
+    
+    #Constraint 3    
+        
+    for edge in not_edge:
+        for l in range(N):
+            i = edge[0]
+            j = edge[1]
+            # x_il
+            x_il_index =  bit(i, l, N)
+            # x_j(l+1)
+            l_plus = (l+1) % N
+            x_jlplus_index = bit(j, l_plus, N)
+            tsp_cost += int(x[x_il_index]) * int(x[x_jlplus_index]) * _lambda
+
+    return tsp_cost
 
 def get_black_box_objective(G,p):
     backend = Aer.get_backend('qasm_simulator')
@@ -303,7 +393,16 @@ def get_black_box_objective(G,p):
         return compute_tsp_energy(invert_counts(counts),G)
     return f
 
-
+def get_black_box_objective_2(G,p):
+    backend = Aer.get_backend('qasm_simulator')
+    def f(theta):
+        beta = theta[:p]
+        gamma = theta[p:]
+        _lambda = _LAMBDA # get global _lambda 
+        qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
+        counts = execute(qc, backend, seed_simulator=10).result().get_counts()
+        return compute_tsp_energy_2(invert_counts(counts),G)
+    return f
 
 if __name__ == '__main__':
     
@@ -324,7 +423,7 @@ if __name__ == '__main__':
     print("labels")
     labels = nx.get_edge_attributes(G,'weight')
 
-    z_term, zz_term = get_classical_simplified_hamiltonian(G, 1)
+    #z_term, zz_term = get_classical_simplified_hamiltonian(G, 1)
     
     #print("z term")
     #print(z_term)
@@ -332,4 +431,37 @@ if __name__ == '__main__':
     #print("zz term")
     #print(zz_term)
 
-    print(get_QAOA_circuit(G, beta = [2,3], gamma = [4,5], _lambda = 1))
+    #print(get_QAOA_circuit(G, beta = [2,3], gamma = [4,5], _lambda = 1))
+
+    p = 5
+    obj = get_black_box_objective(G,p)
+    init_point = np.array([0.8,2.2,0.83,2.15,0.37,2.4,6.1,2.2,3.8,6.1])
+    #res_sample = minimize(obj, init_point,method="COBYLA",options={"maxiter":2500,"disp":True})
+    #print(res_sample)
+
+    # Marina Solutions
+    obj = get_black_box_objective_2(G,p)
+    #res_sample = minimize(obj, init_point,method="COBYLA",options={"maxiter":2500,"disp":True})
+    #print(res_sample)
+
+    theta_2 = [0.72685401, 2.15678239, 0.86389827, 2.19403121, 0.26916675, 2.19832144, 7.06651453, 3.20333137, 3.81301611, 6.08893568]
+    theta_1 = [0.90644898, 2.15994212, 1.8609325 , 2.14042604, 1.49126214, 2.4127999 , 6.10529434, 2.18238732, 3.84056674, 6.07097744]
+
+    beta = theta_1[:p]
+    gamma = theta_1[p:]
+    _lambda = _LAMBDA # get global _lambda 
+    qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
+    backend = Aer.get_backend('qasm_simulator')
+    job = execute(qc, backend)
+    plot_histogram(job.result().get_counts(), color='midnightblue', title="New Histogram")
+
+
+    beta = theta_2[:p]
+    gamma = theta_2[p:]
+    _lambda = _LAMBDA # get global _lambda 
+    qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
+    backend = Aer.get_backend('qasm_simulator')
+    job = execute(qc, backend)
+    plot_histogram(job.result().get_counts(), color='midnightblue', title="New Histogram")
+
+    
