@@ -1,6 +1,5 @@
 
 from thirdParty.classical import rand_graph, classical, bitstring_to_path, calc_cost
-import numpy as np
 from utils import mapeo_grafo
 
 import qiskit
@@ -10,16 +9,23 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 from operator import itemgetter
 from scipy.optimize import minimize
-from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, execute, Aer
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, execute, Aer, assemble
+from qiskit.quantum_info import Statevector
 from qiskit.aqua.algorithms import NumPyEigensolver
 from qiskit.quantum_info import Pauli
 from qiskit.aqua.operators import op_converter
 from qiskit.aqua.operators import WeightedPauliOperator
 from qiskit.visualization import plot_histogram
+from qiskit.providers.aer.extensions.snapshot_statevector import *
+import json
+import csv
 
 
 # Gloabal _lambda variable
-_LAMBDA = 1
+_LAMBDA = 10
+_SHOTS = 10000
+_UNIFORM_CONVERGENCE_SAMPLE = []
+
 
 # returns the bit index for an alpha and j
 def bit(i_city, l_time, num_cities):
@@ -39,7 +45,7 @@ def append_z_term(qc, q_i, gamma, constant_term):
 
 # e^(cX)
 def append_x_term(qc,qi,beta):
-    qc.rx(2*beta, qi)
+    qc.rx(-2*beta, qi)
 
 def get_not_edge_in(G):
     N = G.number_of_nodes()
@@ -272,6 +278,8 @@ def get_QAOA_circuit(G, beta, gamma, _lambda):
         qc = qc.compose(get_cost_circuit(G, gamma[i], _lambda))
         qc = qc.compose(get_mixer_operator(G, beta[i]))
         qc.barrier(range(N**2))
+
+    qc.snapshot_statevector("final_state")
     
     qc.measure(range(N**2),range(N**2))
     
@@ -317,7 +325,8 @@ def compute_tsp_energy_2(counts, G):
         obj_for_meas = tsp_obj_2(meas, G, _LAMBDA)
         energy += obj_for_meas*meas_count
         total_counts += meas_count
-    return energy/total_counts
+    mean = energy/total_counts
+    return mean
 
 def tsp_obj_2(x, G,_lambda):
     # obtenemos el valor evaluado en f(x_1, x_2,... x_n)
@@ -389,24 +398,263 @@ def get_black_box_objective(G,p):
         gamma = theta[p:]
         _lambda = _LAMBDA # get global _lambda 
         qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
-        counts = execute(qc, backend, seed_simulator=10).result().get_counts()
+        counts = execute(qc, backend, seed_simulator=10, shots=_SHOTS).result().get_counts()
         return compute_tsp_energy(invert_counts(counts),G)
     return f
 
 def get_black_box_objective_2(G,p):
     backend = Aer.get_backend('qasm_simulator')
+    sim = Aer.get_backend('aer_simulator')
     def f(theta):
         beta = theta[:p]
         gamma = theta[p:]
+        #print(beta)
         _lambda = _LAMBDA # get global _lambda 
         qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
-        counts = execute(qc, backend, seed_simulator=10).result().get_counts()
-        return compute_tsp_energy_2(invert_counts(counts),G)
+        #print(beta)
+        result = execute(qc, backend, seed_simulator=10, shots=_SHOTS).result()
+        
+        final_state_vector = result.data()["snapshots"]["statevector"]["final_state"][0]
+        
+        state_vector = Statevector(final_state_vector)
+        probabilities = state_vector.probabilities()
+        # expected value
+        #print("prob-dict")
+        #print(state_vector.probabilities_dict())
+        probabilities_states = invert_counts(state_vector.probabilities_dict())
+        expected_value = 0
+        for state,probability in probabilities_states.items():
+            # get cost from state
+            cost = tsp_obj_2(state, G, _LAMBDA)
+            expected_value += cost*probability
+
+        
+        #print(probabilities)
+        
+        counts = result.get_counts()
+
+        #qc.save_statevector()   # Tell simulator to save statevector
+        #qobj = assemble(qc)     # Create a Qobj from the circuit for the simulator to run
+        #state_vector = sim.run(qobj).result().get_statevector()
+        #state_vector = Statevector(state_vector)
+        #probabilities = state_vector.probabilities()
+
+        mean = compute_tsp_energy_2(invert_counts(counts),G)
+        global _UNIFORM_CONVERGENCE_SAMPLE
+        _UNIFORM_CONVERGENCE_SAMPLE.append({
+            "beta" : beta,
+            "gamma" : gamma,
+            "counts" : counts,
+            "mean" : mean,
+            "probabilities" : probabilities,
+            "expected_value" : expected_value
+        })
+        return mean
     return f
 
-if __name__ == '__main__':
+
+def compute_tsp_min_energy_2(counts, G):
+    energy = 0
+    get_counts = 0
+    total_counts = 0
+    min = 1000000000000000000000
+    index = 0
+    min_meas = "" 
+    for meas, meas_count in counts.items():
+        index = index + 1
+        obj_for_meas = tsp_obj_2(meas, G, _LAMBDA)
+        if obj_for_meas < min:
+            min = obj_for_meas
+            min_meas = meas
+    return index, min, min_meas
+
+def compute_tsp_min_energy_1(counts, G):
+    energy = 0
+    get_counts = 0
+    total_counts = 0
+    min = 1000000000000000000000
+    index = 0
+    min_meas = "" 
+    for meas, meas_count in counts.items():
+        index = index + 1
+        obj_for_meas = tsp_obj(meas, G)
+        if obj_for_meas < min:
+            min = obj_for_meas
+            min_meas = meas
+    return index, min, min_meas
+
+def test_counts_2(counts, G):
+    mean_energy2  = compute_tsp_energy_2(invert_counts(counts),G)
+    cantidad, min, min_meas = compute_tsp_min_energy_2(invert_counts(counts),G)
+    print("*************************")
+    print("En el algoritmo 2 (Marina) el valor esperado como resultado es " + str(mean_energy2))
+    print("El valor minimo de todos los evaluados es " + str(min) + " se evaluaron un total de " + str(cantidad))
+    print("El vector minimo es " + min_meas)
+
+
+def test_counts_1(counts, G):
+    mean_energy1  = compute_tsp_energy(invert_counts(counts),G)
+    cantidad, min, min_meas = compute_tsp_min_energy_1(invert_counts(counts),G)
+    print("*************************")
+    print("En el algoritmo 1 (Pablo) el valor esperado como resultado es " + str(mean_energy1))
+    print("El valor minimo de todos los evaluados es " + str(min) + " se evaluaron un total de " + str(cantidad))
+    print("El vector minimo es " + min_meas)
+
+def test_solution(grafo=None, p=7):
+    global _UNIFORM_CONVERGENCE_SAMPLE
+    _UNIFORM_CONVERGENCE_SAMPLE = []
+    if grafo == None:
+        cantidad_ciudades = 2
+        pesos, conexiones = None, None
+        mejor_camino = None
+
+        while not mejor_camino:
+            pesos, conexiones = rand_graph(cantidad_ciudades)
+            mejor_costo, mejor_camino = classical(pesos, conexiones, loop=False)
+        
+        G = mapeo_grafo(conexiones, pesos)
+        print(mejor_costo)
+        print(mejor_camino)
+        print(G.edges())
+        print(G.nodes())
+    else:
+        G = grafo
+    # beta [0,pi], gamma [0, 2pi]
+   
+    # create bounds for beta [0,pi]
+    bounds = []
+    intial_random = []
+
+    for i in range(p):
+        bounds.append((0, np.pi))
+        intial_random.append(np.random.uniform(0,np.pi))
+
+    # create bounds for gamma [0,2*pi]
+    for i in range(p):
+        bounds.append((0, np.pi * 2))
+        intial_random.append(np.random.uniform(0,2*np.pi))
+
+    init_point = np.array(intial_random)
+
+    # Pablo Solutions
+    #obj = get_black_box_objective(G,p)
     
-    cantidad_ciudades = 4
+    #res_sample_1 = minimize(obj, init_point,method="COBYLA",options={"maxiter":2500,"disp":True})
+    #print(res_sample_1)
+
+    # Marina Solutions
+
+    obj = get_black_box_objective_2(G,p)
+    res_sample_2 = minimize(obj, init_point, method="COBYLA", options={"maxiter":2500,"disp":True})
+    print(res_sample_2)
+
+    #theta_1 = res_sample_1.x
+    theta_2 = res_sample_2.x
+    
+    #beta = theta_1[:p]
+    #gamma = theta_1[p:]
+    #_lambda = _LAMBDA # get global _lambda 
+    #qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
+    #backend = Aer.get_backend('qasm_simulator')
+    #job_1 = execute(qc, backend, shots=_SHOTS)
+    #resutls_1 = job_1.result().get_counts()
+    #test_counts_1(resutls_1, G)
+
+    beta = theta_2[:p]
+    gamma = theta_2[p:]
+    _lambda = _LAMBDA # get global _lambda 
+    qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
+    backend = Aer.get_backend('qasm_simulator')
+    job_2 = execute(qc, backend, shots=_SHOTS)
+    resutls_2 = job_2.result().get_counts()
+    test_counts_2(resutls_2, G)
+    #print( _UNIFORM_CONVERGENCE_SAMPLE)
+    return job_2, G, _UNIFORM_CONVERGENCE_SAMPLE
+    
+def create_multiple_p_mismo_grafo():
+    header = ['p', 'state', 'probability', 'mean']
+    length_p = 10
+    with open('qaoa_multiple_p.csv', 'w', encoding='UTF8') as f:
+        writer = csv.writer(f)
+        # write the header
+        writer.writerow(header)
+        first_p = False
+        UNIFORM_CONVERGENCE_SAMPLE = []
+
+        for p in range(length_p):
+            p = p+1
+            if first_p == False:
+                job_2, G, UNIFORM_CONVERGENCE_SAMPLE = test_solution(p=p)
+                first_p = True
+            else:
+                job_2, G, UNIFORM_CONVERGENCE_SAMPLE = test_solution(grafo=G, p=p)
+                
+            # Sort the JSON data based on the value of the brand key
+            UNIFORM_CONVERGENCE_SAMPLE.sort(key=lambda x: x["mean"])
+
+
+            mean = UNIFORM_CONVERGENCE_SAMPLE[0]["mean"]
+            print(mean)
+            state = 0
+            for probability in UNIFORM_CONVERGENCE_SAMPLE[0]["probabilities"]:
+                state += 1
+                writer.writerow([p,state, probability,mean])
+
+def create_multiple_p_mismo_grafo_multiples_instanncias():
+    header = ['instance','p','distance', 'mean']
+    length_p = 4
+    length_instances = 10
+    with open('qaoa_multiple_p_distance.csv', 'w', encoding='UTF8') as f:
+        writer = csv.writer(f)
+        # write the header
+        writer.writerow(header)
+        instance_index = 0
+        for instance in range(length_instances):
+            instance_index += 1
+            first_p = False
+            UNIFORM_CONVERGENCE_P = []
+            UNIFORM_CONVERGENCE_SAMPLE = []
+            for p in range(length_p):
+                p = p+1
+                print("p es igual  " + str(p))
+                if first_p == False:
+                    print("Vuelve a llamar a test_solution")
+                    job_2, G, UNIFORM_CONVERGENCE_SAMPLE = test_solution(p=p)
+                    first_p = True
+                else:
+                    job_2, G, UNIFORM_CONVERGENCE_SAMPLE = test_solution(grafo=G, p=p)
+
+                # Sort the JSON data based on the value of the brand key
+                UNIFORM_CONVERGENCE_SAMPLE.sort(key=lambda x: x["expected_value"])
+                convergence_min = UNIFORM_CONVERGENCE_SAMPLE[0]
+                UNIFORM_CONVERGENCE_P.append({
+                    "mean":convergence_min["expected_value"],
+                    "probabilities": convergence_min["probabilities"]
+                })
+                print("expected value min con p =" + str(p) + " : " + str(convergence_min["expected_value"]))
+            
+            cauchy_function_nk = UNIFORM_CONVERGENCE_P[len(UNIFORM_CONVERGENCE_P) - 1]
+            p_index = 0
+            for p_state in UNIFORM_CONVERGENCE_P:
+                p_index += 1
+                print(p_index)
+                mean = p_state["mean"]
+                #print(p_state)
+                print("expected value min")
+                print(mean)
+                distance_p_cauchy_function_nk = np.max(np.abs(cauchy_function_nk["probabilities"] - p_state["probabilities"]))
+                writer.writerow([instance_index, p_index, distance_p_cauchy_function_nk, mean])
+            
+        
+    
+    
+        
+if __name__ == '__main__':
+    #create_multiple_p_mismo_grafo()
+    create_multiple_p_mismo_grafo_multiples_instanncias()
+
+def defult_init():
+    cantidad_ciudades = 2
     pesos, conexiones = None, None
     mejor_camino = None
 
@@ -441,11 +689,11 @@ if __name__ == '__main__':
 
     # Marina Solutions
     obj = get_black_box_objective_2(G,p)
-    #res_sample = minimize(obj, init_point,method="COBYLA",options={"maxiter":2500,"disp":True})
-    #print(res_sample)
+    res_sample = minimize(obj, init_point,method="COBYLA",options={"maxiter":2500,"disp":True})
+    print(res_sample)
 
     theta_2 = [0.72685401, 2.15678239, 0.86389827, 2.19403121, 0.26916675, 2.19832144, 7.06651453, 3.20333137, 3.81301611, 6.08893568]
-    theta_1 = [0.90644898, 2.15994212, 1.8609325 , 2.14042604, 1.49126214, 2.4127999 , 6.10529434, 2.18238732, 3.84056674, 6.07097744]
+    theta_1 = [0.90644898, 2.15994212, 1.8609325 , 2.14042604, 1.49126214, 2.4127999, 6.10529434, 2.18238732, 3.84056674, 6.07097744]
 
     beta = theta_1[:p]
     gamma = theta_1[p:]
@@ -453,7 +701,7 @@ if __name__ == '__main__':
     qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
     backend = Aer.get_backend('qasm_simulator')
     job = execute(qc, backend)
-    plot_histogram(job.result().get_counts(), color='midnightblue', title="New Histogram")
+    print(plot_histogram(job.result().get_counts(), color='midnightblue', title="New Histogram"))
 
 
     beta = theta_2[:p]
@@ -462,6 +710,6 @@ if __name__ == '__main__':
     qc = get_QAOA_circuit(G, beta, gamma, _LAMBDA)
     backend = Aer.get_backend('qasm_simulator')
     job = execute(qc, backend)
-    plot_histogram(job.result().get_counts(), color='midnightblue', title="New Histogram")
+    print(plot_histogram(job.result().get_counts(), color='midnightblue', title="New Histogram"))
 
     

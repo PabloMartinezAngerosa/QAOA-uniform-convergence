@@ -5,7 +5,7 @@
 ##################################################################################################
 import numpy as np
 
-def rand_graph(num_cities, percent_connected=.75):
+def rand_graph(num_cities, percent_connected=1):
     """
     Returns (symmetric) weight and connectivity matrixes.
     Weights are set to 0 when two nodes are not connected.
