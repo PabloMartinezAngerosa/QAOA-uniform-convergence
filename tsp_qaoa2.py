@@ -417,6 +417,8 @@ def get_black_box_objective_2(G,p):
         probabilities = state_vector.probabilities()
         probabilities_states = invert_counts(state_vector.probabilities_dict())
         expected_value = 0
+        
+        for state,probability in probabilities_states.items():
             cost = tsp_obj_2(state, G, LAMBDA)
             expected_value += cost*probability
         
@@ -487,6 +489,7 @@ def test_solution(grafo=None, p=7):
 
     global UNIFORM_CONVERGENCE_SAMPLE
     UNIFORM_CONVERGENCE_SAMPLE = []
+    
     if grafo == None:
         cantidad_ciudades = 2
         pesos, conexiones = None, None
