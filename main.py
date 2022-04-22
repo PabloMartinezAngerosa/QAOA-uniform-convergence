@@ -425,7 +425,7 @@ def run_QAOA(p,ciudades, grafo):
 
 if __name__ == '__main__':
 
-    # Run QAOA 5 p-depth
+    # Run QAOA parametros: profundidad p,  numero d ciudades, 
     run_QAOA(5, 3, None)
     
     
